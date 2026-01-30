@@ -109,6 +109,18 @@
           <div style="height:10px"></div>
           <div class="small">Notes (stored in session)</div>
           <textarea id="notes" placeholder="What are you testing? e.g. ‘cold-load checkout page, cache disabled’"></textarea>
+
+          <div style="height:12px"></div>
+          <div class="small">Analyze another tab (remote probe)</div>
+          <div class="small" style="margin-top:4px">1) Open the target page  2) Open DevTools → Console  3) Paste the snippet below. It will stream performance entries into this tab.</div>
+          <div style="height:8px"></div>
+          <div class="grid">
+            <button id="btnNewProbe">New probe link</button>
+            <button id="btnCopyProbe" class="primary">Copy probe snippet</button>
+          </div>
+          <div style="height:8px"></div>
+          <textarea id="probeSnippet" class="mono" readonly></textarea>
+          <div class="small" style="margin-top:6px">Security: the snippet includes a one-time token so random pages can’t spam this tab.</div>
         </div>
       </div>
 

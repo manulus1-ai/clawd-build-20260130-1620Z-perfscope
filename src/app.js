@@ -24,6 +24,9 @@ const ui = {
   btnImport: el('btnImport'),
   fileImport: el('fileImport'),
   notes: el('notes'),
+  btnNewProbe: el('btnNewProbe'),
+  btnCopyProbe: el('btnCopyProbe'),
+  probeSnippet: el('probeSnippet'),
   wf: el('wf'),
   overlay: el('overlay'),
   legend: el('legend'),
@@ -57,11 +60,107 @@ let state = {
   outliers: [],
   sessionId: null,
   startedAt: Date.now(),
+
+  // Remote probe: a snippet you paste into another tab to stream entries here.
+  probeToken: null,
+  probeConnected: false,
+  probeSource: null,
 };
 
 function setStatus(text, live) {
   ui.statusText.textContent = text;
   ui.liveDot.classList.toggle('live', !!live);
+}
+
+function randToken(){
+  const a = new Uint8Array(16);
+  crypto.getRandomValues(a);
+  return Array.from(a).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+
+function buildProbeSnippet(){
+  const token = state.probeToken || (state.probeToken = randToken());
+  // Use window.open with a stable name so it reuses the existing PerfScope tab.
+  const perfscopeUrl = location.origin + location.pathname;
+  const types = ['navigation','resource','paint','longtask','mark','measure'];
+
+  return `(() => {
+  const PERF_SCOPE = ${JSON.stringify(perfscopeUrl)};
+  const TOKEN = ${JSON.stringify(token)};
+  const ENTRY_TYPES = ${JSON.stringify(types)};
+
+  const win = window.open(PERF_SCOPE, 'perfscope');
+  if (!win) {
+    console.warn('[PerfScope probe] Popup blocked. Open PerfScope first, then re-run this snippet.');
+    return;
+  }
+
+  const send = (kind, payload={}) => {
+    win.postMessage({ __perfscope: true, token: TOKEN, kind, payload }, '*');
+  };
+
+  const pick = (obj, keys) => {
+    const out = {};
+    for (const k of keys) {
+      if (obj[k] != null) out[k] = obj[k];
+    }
+    return out;
+  };
+
+  const serialize = (e) => {
+    const base = {
+      name: e.name,
+      entryType: e.entryType,
+      startTime: e.startTime,
+      duration: e.duration,
+    };
+    // ResourceTiming / NavigationTiming extras (when present)
+    Object.assign(base, pick(e, [
+      'initiatorType','nextHopProtocol','transferSize','encodedBodySize','decodedBodySize','renderBlockingStatus',
+      'domainLookupStart','domainLookupEnd','connectStart','secureConnectionStart','connectEnd',
+      'requestStart','responseStart','responseEnd'
+    ]));
+    return base;
+  };
+
+  const buf = [];
+  let flushTimer = null;
+  const flush = () => {
+    flushTimer = null;
+    if (!buf.length) return;
+    const batch = buf.splice(0, buf.length);
+    send('entries', { timeOrigin: performance.timeOrigin, entries: batch });
+  };
+  const enqueue = (list) => {
+    for (const e of list) buf.push(serialize(e));
+    if (!flushTimer) flushTimer = setTimeout(flush, 250);
+  };
+
+  send('hello', { href: location.href, ua: navigator.userAgent, timeOrigin: performance.timeOrigin });
+
+  // Seed with existing buffered entries when available.
+  try {
+    for (const t of ENTRY_TYPES) {
+      const existing = performance.getEntriesByType?.(t);
+      if (existing && existing.length) enqueue(existing);
+    }
+  } catch {}
+
+  const observers = [];
+  for (const t of ENTRY_TYPES) {
+    try {
+      const po = new PerformanceObserver((list) => enqueue(list.getEntries()));
+      po.observe({ type: t, buffered: true });
+      observers.push(po);
+    } catch {}
+  }
+
+  console.log('[PerfScope probe] Streaming started. Keep this tab open; stop by reloading the page or closing this tab.');
+})();`;
+}
+
+function refreshProbeUI(){
+  ui.probeSnippet.value = buildProbeSnippet();
 }
 
 function renderChips() {
@@ -426,6 +525,59 @@ function debounce(fn, ms) {
 // Boot
 renderChips();
 ui.kLabel.textContent = String(state.k);
+
+// Remote probe UI
+state.probeToken = randToken();
+refreshProbeUI();
+ui.btnNewProbe?.addEventListener('click', () => {
+  state.probeToken = randToken();
+  state.probeConnected = false;
+  state.probeSource = null;
+  refreshProbeUI();
+  setStatus('new probe token created', false);
+});
+ui.btnCopyProbe?.addEventListener('click', async () => {
+  try{
+    await navigator.clipboard.writeText(ui.probeSnippet.value);
+    setStatus('probe snippet copied', false);
+  } catch {
+    // fallback: select text
+    ui.probeSnippet.focus();
+    ui.probeSnippet.select();
+    setStatus('select/copy the snippet manually', false);
+  }
+});
+
+// Receive entries from a remote probe via postMessage.
+window.addEventListener('message', (ev) => {
+  const d = ev.data;
+  if (!d || d.__perfscope !== true) return;
+  if (d.token !== state.probeToken) return;
+
+  state.probeConnected = true;
+  state.probeSource = d.payload?.href || ev.origin || 'remote';
+
+  if (d.kind === 'hello'){
+    setStatus('remote probe connected', true);
+    return;
+  }
+
+  if (d.kind === 'entries'){
+    const incoming = Array.isArray(d.payload?.entries) ? d.payload.entries : [];
+    // Assign ids locally and tag as remote.
+    for (const e of incoming){
+      state.entries.push({
+        id: crypto.randomUUID?.() || ('r_' + Math.random().toString(16).slice(2)),
+        ...e,
+        _remote: true,
+      });
+    }
+    ui.entryCount.textContent = `${filteredEntries().length} entries`;
+    // recompute occasionally to keep UI responsive
+    if (state.entries.length % 40 === 0) recompute();
+    persistDebounced();
+  }
+});
 
 const recorder = createRecorder();
 installHandlers(recorder);
