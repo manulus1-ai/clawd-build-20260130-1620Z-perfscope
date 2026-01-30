@@ -199,14 +199,20 @@ function renderDiagnostics(entries) {
   const supp = PerformanceObserver?.supportedEntryTypes || [];
   const longtaskSupported = supp.includes('longtask');
 
+  const counts = new Map();
+  for (const e of entries) counts.set(e.entryType, (counts.get(e.entryType) || 0) + 1);
+  const countStr = [...counts.entries()].sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${k}:${v}`).join('  ');
+
   ui.diag.innerHTML = `
     <div class="kvs">
       <div>supported</div><div class="mono">${escapeHtml(supp.join(', ')) || '—'}</div>
       <div>longtask</div><div class="mono">${longtaskSupported ? 'supported' : 'not supported'}</div>
       <div>entries</div><div class="mono">${entries.length}</div>
+      <div>types</div><div class="mono">${escapeHtml(countStr || '—')}</div>
       <div>p50 duration</div><div class="mono">${fmtMs(s.p50Duration || 0)}</div>
       <div>p95 duration</div><div class="mono">${fmtMs(s.p95Duration || 0)}</div>
       <div>time span</div><div class="mono">${fmtMs(s.maxTime - s.minTime)}</div>
+      <div>shortcuts</div><div class="mono">r: start/stop • s: snapshot • /: filter</div>
     </div>
     <div style="height:8px"></div>
     <div class="small">Tip: for cross-origin timing details, your resources must send <code>Timing-Allow-Origin</code>.</div>
@@ -431,3 +437,24 @@ window.addEventListener('hashchange', loadFromPermalinkOrStorage);
 
 // Re-render on resize (canvas is resolution dependent)
 window.addEventListener('resize', debounce(() => render(filteredEntries()), 150));
+
+// Keyboard shortcuts
+window.addEventListener('keydown', (ev) => {
+  if (ev.target && ['INPUT','TEXTAREA','SELECT'].includes(ev.target.tagName)) {
+    // allow / to focus filter even when not already typing
+    if (ev.key !== '/') return;
+  }
+  if (ev.key === 'r' || ev.key === 'R') {
+    ev.preventDefault();
+    if (state.recording) ui.btnStop.click();
+    else ui.btnStart.click();
+  }
+  if (ev.key === 's' || ev.key === 'S') {
+    ev.preventDefault();
+    ui.btnSnapshot.click();
+  }
+  if (ev.key === '/') {
+    ev.preventDefault();
+    ui.filterText.focus();
+  }
+});
