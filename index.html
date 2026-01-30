@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>PerfScope — Performance Timeline & Resource Cluster Explorer</title>
+  <meta name="description" content="Record PerformanceObserver streams (resource/paint/navigation/longtask), visualize a waterfall, and cluster/analyze anomalies — shareable via permalinks." />
+  <link rel="icon" href="data:," />
+  <style>
+    :root{
+      --bg:#0b1020; --panel:#121a33; --panel2:#0f1730; --text:#e9eeff; --muted:#a9b4e7;
+      --accent:#7cd4ff; --warn:#ffcc66; --danger:#ff6b8b; --ok:#7dffb2;
+      --border:rgba(255,255,255,.10);
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+    }
+    html,body{height:100%; margin:0; background:radial-gradient(1200px 800px at 10% 0%, #16245a 0%, var(--bg) 45%, #070a14 100%); color:var(--text); font-family:var(--sans);}
+    a{color:var(--accent)}
+    header{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 16px; border-bottom:1px solid var(--border); background:rgba(6,10,22,.35); backdrop-filter: blur(10px); position:sticky; top:0; z-index:10;}
+    .brand{display:flex; align-items:baseline; gap:10px}
+    .brand h1{font-size:16px; margin:0}
+    .brand .tag{font-size:12px; color:var(--muted)}
+    .row{display:flex; gap:12px; padding:12px 16px}
+    .panel{background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02)); border:1px solid var(--border); border-radius:12px; overflow:hidden}
+    .panel h2{margin:0; font-size:13px; padding:10px 12px; background:rgba(255,255,255,.03); border-bottom:1px solid var(--border); color:var(--muted); letter-spacing:.02em}
+    .panel .body{padding:10px 12px}
+    .left{flex:0 0 340px; min-width:300px}
+    .main{flex:1; min-width:520px}
+    .grid{display:grid; grid-template-columns:1fr 1fr; gap:10px}
+    button{background:rgba(255,255,255,.06); color:var(--text); border:1px solid var(--border); border-radius:10px; padding:8px 10px; cursor:pointer}
+    button:hover{border-color:rgba(124,212,255,.35)}
+    button.primary{background:rgba(124,212,255,.14); border-color:rgba(124,212,255,.35)}
+    button.danger{background:rgba(255,107,139,.12); border-color:rgba(255,107,139,.35)}
+    button:disabled{opacity:.5; cursor:not-allowed}
+    .kvs{display:grid; grid-template-columns:110px 1fr; gap:6px 10px; font-size:12px; color:var(--muted)}
+    .kvs code{font-family:var(--mono); color:var(--text)}
+    .mono{font-family:var(--mono)}
+    .small{font-size:12px; color:var(--muted)}
+    .chips{display:flex; flex-wrap:wrap; gap:6px}
+    .chip{font-size:12px; padding:4px 8px; border:1px solid var(--border); border-radius:999px; color:var(--muted)}
+    .chip.on{color:var(--text); border-color:rgba(124,212,255,.35); background:rgba(124,212,255,.10)}
+    .split{display:flex; gap:10px}
+    input[type="range"]{width:100%}
+    input[type="text"], textarea, select{width:100%; padding:8px 10px; border-radius:10px; border:1px solid var(--border); background:rgba(0,0,0,.18); color:var(--text); font-family:var(--mono)}
+    textarea{min-height:90px; resize:vertical}
+    .canvasWrap{position:relative; height:520px; background:rgba(0,0,0,.18)}
+    canvas{width:100%; height:100%; display:block}
+    .overlay{position:absolute; inset:0; pointer-events:none}
+    .legend{display:flex; gap:10px; flex-wrap:wrap; font-size:12px; color:var(--muted); padding:8px 12px; border-top:1px solid var(--border); background:rgba(255,255,255,.02)}
+    .swatch{width:10px; height:10px; border-radius:3px; display:inline-block; margin-right:6px; border:1px solid rgba(255,255,255,.12)}
+    .status{display:flex; gap:10px; align-items:center; font-size:12px; color:var(--muted)}
+    .dot{width:8px; height:8px; border-radius:999px; background:rgba(255,255,255,.25)}
+    .dot.live{background:var(--ok)}
+    .table{width:100%; border-collapse:collapse; font-size:12px}
+    .table th,.table td{padding:6px 8px; border-bottom:1px solid rgba(255,255,255,.07); vertical-align:top}
+    .table th{color:var(--muted); text-align:left; font-weight:600}
+    .table tr:hover td{background:rgba(124,212,255,.06)}
+    .pill{display:inline-block; padding:2px 6px; border-radius:999px; border:1px solid var(--border); color:var(--muted); font-size:11px}
+    footer{padding:12px 16px; color:var(--muted); font-size:12px}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <h1>PerfScope</h1>
+      <div class="tag">record • visualize • cluster • share</div>
+    </div>
+    <div class="status" id="status">
+      <div class="dot" id="liveDot"></div>
+      <span id="statusText">idle</span>
+      <span class="mono" id="entryCount">0 entries</span>
+    </div>
+  </header>
+
+  <div class="row">
+    <div class="left">
+      <div class="panel">
+        <h2>Controls</h2>
+        <div class="body">
+          <div class="grid">
+            <button class="primary" id="btnStart">Start recording</button>
+            <button id="btnStop" disabled>Stop</button>
+            <button id="btnSnapshot">Snapshot now</button>
+            <button class="danger" id="btnClear">Clear</button>
+          </div>
+          <div style="height:10px"></div>
+          <div class="small">Entry types</div>
+          <div class="chips" id="chips"></div>
+          <div style="height:10px"></div>
+          <div class="small">Cluster count (k-means)</div>
+          <div class="split">
+            <input id="kRange" type="range" min="2" max="9" step="1" value="5" />
+            <div class="mono" style="min-width:32px; text-align:right" id="kLabel">5</div>
+          </div>
+          <div style="height:10px"></div>
+          <div class="small">Filter</div>
+          <input id="filterText" type="text" placeholder="url contains… (e.g. .js, api, cdn)" />
+          <div style="height:10px"></div>
+          <div class="small">Share / portability</div>
+          <div class="grid">
+            <button id="btnPermalink">Copy permalink</button>
+            <button id="btnExport">Export JSON</button>
+          </div>
+          <div style="height:8px"></div>
+          <button id="btnImport">Import JSON</button>
+          <input id="fileImport" type="file" accept="application/json" style="display:none" />
+          <div style="height:10px"></div>
+          <div class="small">Notes (stored in session)</div>
+          <textarea id="notes" placeholder="What are you testing? e.g. ‘cold-load checkout page, cache disabled’"></textarea>
+        </div>
+      </div>
+
+      <div style="height:12px"></div>
+
+      <div class="panel">
+        <h2>Selected entry</h2>
+        <div class="body">
+          <div class="kvs" id="selectedKVs"></div>
+        </div>
+      </div>
+
+      <div style="height:12px"></div>
+
+      <div class="panel">
+        <h2>Diagnostics</h2>
+        <div class="body" id="diag"></div>
+      </div>
+    </div>
+
+    <div class="main">
+      <div class="panel">
+        <h2>Waterfall timeline</h2>
+        <div class="canvasWrap">
+          <canvas id="wf"></canvas>
+          <div class="overlay" id="overlay"></div>
+        </div>
+        <div class="legend" id="legend"></div>
+      </div>
+
+      <div style="height:12px"></div>
+
+      <div class="panel">
+        <h2>Top outliers (robust z-score on duration)</h2>
+        <div class="body">
+          <table class="table" id="outliers">
+            <thead><tr><th>z</th><th>type</th><th>duration</th><th>name</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    Built on PerformanceObserver + Resource/Navigation/Paint/LongTask entries. Works best on Chromium.
+    External libs via CDN: d3-scale (color/scale), lz-string (permalink compression), idb-keyval (IndexedDB).
+  </footer>
+
+  <script type="module" src="./src/app.js"></script>
+</body>
+</html>
