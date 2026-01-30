@@ -159,6 +159,20 @@ function renderSelected(entries) {
   if (e.encodedBodySize != null) add('encodedBodySize', fmtBytes(e.encodedBodySize));
   if (e.decodedBodySize != null) add('decodedBodySize', fmtBytes(e.decodedBodySize));
   if (e.renderBlockingStatus) add('renderBlockingStatus', e.renderBlockingStatus);
+
+  // Resource timing breakdown (when available and same-origin or TAO-enabled)
+  if (e.entryType === 'resource' && Number.isFinite(e.responseStart) && Number.isFinite(e.startTime)) {
+    const dns = (e.domainLookupEnd || 0) - (e.domainLookupStart || 0);
+    const tcp = (e.connectEnd || 0) - (e.connectStart || 0);
+    const tls = e.secureConnectionStart ? (e.connectEnd - e.secureConnectionStart) : 0;
+    const ttfb = (e.responseStart || 0) - (e.requestStart || 0);
+    const dl = (e.responseEnd || 0) - (e.responseStart || 0);
+    if (dns > 0) add('dns', fmtMs(dns));
+    if (tcp > 0) add('tcp', fmtMs(tcp));
+    if (tls > 0) add('tls', fmtMs(tls));
+    if (ttfb > 0) add('ttfb', fmtMs(ttfb));
+    if (dl > 0) add('download', fmtMs(dl));
+  }
   if (state.clusters && state.clusters.has(e.id)) add('cluster', state.clusters.get(e.id));
 }
 
@@ -219,12 +233,26 @@ function render(entries) {
   const pick = drawWaterfall(ui.wf, entries, {
     clusters: state.clusters,
     clusterColors: colors,
-    onHover: (id) => {
-      ui.overlay.textContent = '';
-      ui.overlay.style.pointerEvents = 'none';
-      ui.wf.style.cursor = id ? 'pointer' : 'default';
-    }
   });
+
+  // Hover tooltip
+  ui.wf.onmousemove = (ev) => {
+    const id = pickAt(ui.wf, pick, ev);
+    ui.wf.style.cursor = id ? 'pointer' : 'default';
+    const e = id ? entries.find(x => x.id === id) : null;
+    if (!e) { ui.overlay.innerHTML = ''; return; }
+
+    const rect = ui.wf.getBoundingClientRect();
+    const x = ev.clientX - rect.left;
+    const y = ev.clientY - rect.top;
+    ui.overlay.innerHTML = `
+      <div class="tooltip" style="left:${Math.min(rect.width-20, x+12)}px; top:${Math.min(rect.height-20, y+12)}px;">
+        <div class="mono">${escapeHtml(e.entryType)} <span class="t">${fmtMs(e.duration)}</span></div>
+        <div class="mono" style="margin-top:4px">${escapeHtml(shorten(e.name || '', 92))}</div>
+      </div>
+    `;
+  };
+  ui.wf.onmouseleave = () => { ui.overlay.innerHTML = ''; };
 
   renderSelected(entries);
   renderOutliers();
@@ -400,3 +428,6 @@ await loadFromPermalinkOrStorage();
 
 // Keep UI consistent if hash changes (paste shared link)
 window.addEventListener('hashchange', loadFromPermalinkOrStorage);
+
+// Re-render on resize (canvas is resolution dependent)
+window.addEventListener('resize', debounce(() => render(filteredEntries()), 150));
